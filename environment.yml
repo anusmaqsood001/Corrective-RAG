@@ -1,0 +1,24 @@
+name: rag-chatbot
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - python-dotenv
+      - jupyter
+      - notebook
+      - langchain
+      - langchain-core
+      - langchain-community
+      - langchain-text-splitters
+      - langchain-google-genai
+      - google-generativeai
+      - langgraph
+      - pypdf
+      - tavily-python
+      - chromadb
+      - faiss-cpu
+      - pandas
+      - numpy
