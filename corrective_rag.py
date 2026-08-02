@@ -59,8 +59,8 @@ llm = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite", # ya gemini-2.0-flash / gemini-3.1-flash-lite
     google_api_key=os.getenv("GEMINI_API_KEY"),
     temperature=0.2,
-    max_retries=6,              # Limit hit hone par auto-retry karega
-    request_timeout=60
+    max_retries=7,              # Limit hit hone par auto-retry karega
+    request_timeout=70
 )
 
 UPPER_TH = 0.7
