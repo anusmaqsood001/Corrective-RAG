@@ -8,11 +8,11 @@ from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmb
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
-
+from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, START, END
 from dotenv import load_dotenv
 
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 
 load_dotenv()
 
@@ -20,26 +20,47 @@ load_dotenv()
 # Data + Index
 # -----------------------------
 docs = (
-    PyPDFLoader("./documents/book1.pdf").load()
-    + PyPDFLoader("./documents/book2.pdf").load()
-    + PyPDFLoader("./documents/book3.pdf").load()
+    PyPDFLoader(r"C:\Users\anas\Desktop\RAG-Chatbot\lbdl.pdf").load()
 )
 
 chunks = RecursiveCharacterTextSplitter(chunk_size=900, chunk_overlap=150).split_documents(docs)
 for d in chunks:
     d.page_content = d.page_content.encode("utf-8", "ignore").decode("utf-8", "ignore")
 
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-2",  #ya "models/text-embedding-004"
-    google_api_key=os.getenv("GEMINI_API_KEY")
+embeddings = HuggingFaceEmbeddings(
+    model_name="all-MiniLM-L6-v2",
+    model_kwargs={"local_files_only": True}
 )
 
-vector_store = FAISS.from_documents(chunks, embeddings)
+FAISS_DB_DIR = "faiss_index"
+
+def load_or_create_vectorstore(chunks, embeddings):
+    # Check karein ke kiya local folder mein FAISS index exist karta hai
+    if os.path.exists(FAISS_DB_DIR):
+        print("📂 Loading existing FAISS index from disk...")
+        return FAISS.load_local(
+            FAISS_DB_DIR, 
+            embeddings, 
+            allow_dangerous_deserialization=True
+        )
+    else:
+        print("⚡ Calculating embeddings for the first time...")
+        vector_store = FAISS.from_documents(chunks, embeddings)
+        # Disk par save kar lein
+        vector_store.save_local(FAISS_DB_DIR)
+        return vector_store
+
+# Call the function
+vector_store = load_or_create_vectorstore(chunks, embeddings)
+
 retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite",
+    model="gemini-3.1-flash-lite", # ya gemini-2.0-flash / gemini-3.1-flash-lite
     google_api_key=os.getenv("GEMINI_API_KEY"),
+    temperature=0.2,
+    max_retries=6,              # Limit hit hone par auto-retry karega
+    request_timeout=60
 )
 
 UPPER_TH = 0.7
@@ -64,6 +85,8 @@ class State(TypedDict):
     web_query: str
 
     web_docs: List[Document]
+    search_used: bool
+    search_tool: str
 
     answer: str
 
@@ -239,7 +262,7 @@ def rewrite_query_node(state: State) -> State:
 # -----------------------------
 # Web search node: uses web_query
 # -----------------------------
-tavily = TavilySearchResults(max_results=5)
+tavily = TavilySearch(max_results=5)
 
 
 def web_search_node(state: State) -> State:
@@ -247,16 +270,39 @@ def web_search_node(state: State) -> State:
     results = tavily.invoke({"query": q})
 
     web_docs: List[Document] = []
-    for r in results or []:
-        title = r.get("title", "")
-        url = r.get("url", "")
-        content = r.get("content", "") or r.get("snippet", "")
-        text = f"TITLE: {title}\nURL: {url}\nCONTENT:\n{content}"
-        web_docs.append(Document(page_content=text, metadata={"url": url, "title": title}))
+    
+    # CASE 1: Agar results string hai (direct formatted string text)
+    if isinstance(results, str):
+        web_docs.append(Document(page_content=results))
+        
+    # CASE 2: Agar results dictionary hai (e.g., {'results': [...]})
+    elif isinstance(results, dict):
+        raw_list = results.get("results", [])
+        for r in raw_list:
+            if isinstance(r, dict):
+                title = r.get("title", "")
+                url = r.get("url", "")
+                content = r.get("content", "") or r.get("snippet", "")
+                text = f"TITLE: {title}\nURL: {url}\nCONTENT:\n{content}"
+                web_docs.append(Document(page_content=text, metadata={"url": url, "title": title}))
+                
+    # CASE 3: Agar results direct list of dicts hai
+    elif isinstance(results, list):
+        for r in results:
+            if isinstance(r, dict):
+                title = r.get("title", "")
+                url = r.get("url", "")
+                content = r.get("content", "") or r.get("snippet", "")
+                text = f"TITLE: {title}\nURL: {url}\nCONTENT:\n{content}"
+                web_docs.append(Document(page_content=text, metadata={"url": url, "title": title}))
+            elif isinstance(r, str):
+                web_docs.append(Document(page_content=r))
 
-    return {"web_docs": web_docs}
-
-
+    return {
+        "web_docs": web_docs,
+        "search_used": True,
+        "search_tool": "Tavily",
+    }
 # -----------------------------
 # Generate
 # -----------------------------
@@ -273,8 +319,20 @@ answer_prompt = ChatPromptTemplate.from_messages(
 
 
 def generate(state: State) -> State:
-    out = (answer_prompt | llm).invoke({"question": state["question"], "context": state["refined_context"]})
-    return {"answer": out.content}
+    out = (answer_prompt | llm).invoke(
+        {"question": state["question"], "context": state.get("refined_context", "")}
+    )
+    
+    # Safe text extraction from out.content
+    content = out.content
+    if isinstance(content, list) and len(content) > 0:
+        first_item = content[0]
+        if isinstance(first_item, dict) and "text" in first_item:
+            content = first_item["text"]
+        else:
+            content = str(first_item)
+            
+    return {"answer": content}
 
 
 # -----------------------------
@@ -326,27 +384,3 @@ g.add_edge("generate", END)
 app = g.compile()
 
 
-if __name__ == "__main__":
-    # -----------------------------
-    # Run example
-    # -----------------------------
-    res = app.invoke(
-        {
-            "question": "Batch normalization vs layer normalization",
-            "docs": [],
-            "good_docs": [],
-            "verdict": "",
-            "reason": "",
-            "strips": [],
-            "kept_strips": [],
-            "refined_context": "",
-            "web_query": "",
-            "web_docs": [],
-            "answer": "",
-        }
-    )
-
-    print("VERDICT:", res["verdict"])
-    print("REASON:", res["reason"])
-    print("WEB_QUERY:", res["web_query"])
-    print("\nOUTPUT:\n", res["answer"])

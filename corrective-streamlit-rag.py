@@ -11,27 +11,57 @@ st.set_page_config(page_title="Corrective RAG", page_icon="🧠", layout="wide")
 st.markdown(
     """
     <style>
+    .reportview-container, .App, .block-container {
+        background: #000000 !important;
+        color: #f8fafc !important;
+    }
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
     }
     .stApp {
-        background: linear-gradient(135deg, #f8fbff 0%, #eef4ff 100%);
+        background: #000000 !important;
     }
     .title-box {
-        background: rgba(255,255,255,0.8);
-        border: 1px solid #dfe9ff;
+        background: rgba(15, 23, 42, 0.95);
+        border: 1px solid #1e293b;
         border-radius: 16px;
         padding: 1.2rem 1.4rem;
-        box-shadow: 0 8px 24px rgba(31, 41, 55, 0.06);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
         margin-bottom: 1rem;
+        color: #f8fafc;
+    }
+    .title-box h1, .title-box p {
+        color: #f8fafc;
     }
     .card {
-        background: white;
-        border: 1px solid #e6ebf5;
+        background: #0f172a;
+        border: 1px solid #334155;
         border-radius: 14px;
         padding: 1rem 1.1rem;
-        box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        color: #f8fafc;
+    }
+    .css-1kyxreq .stButton>button {
+        background-color: #111827;
+        color: #f8fafc;
+    }
+    .css-1kyxreq .stButton>button:hover {
+        background-color: #1f2937;
+        color: #f8fafc;
+    }
+    .stTextInput>div>div>input {
+        background: #020617;
+        color: #f8fafc;
+        border: 1px solid #334155;
+    }
+    .stTextArea>div>div>textarea {
+        background: #020617;
+        color: #f8fafc;
+        border: 1px solid #334155;
+    }
+    .stMarkdown, .stText, .stCodeBlock {
+        color: #f8fafc;
     }
     </style>
     """,
@@ -97,21 +127,52 @@ if st.button("Run RAG", use_container_width=True):
             else:
                 st.success("Completed")
 
+                # Handle case where result itself is a string instead of dict
+                if isinstance(result, str):
+                    raw_answer = result
+                    verdict = "Out of context / Web search"
+                    reason = ""
+                    web_query = ""
+                    refined_context = ""
+                else:
+                    raw_answer = result.get("answer", "No answer generated.")
+                    verdict = result.get("verdict", "")
+                    reason = result.get("reason", "")
+                    web_query = result.get("web_query", "")
+                    refined_context = result.get("refined_context", "")
+
+                # Clean extraction for list/dict/string formats
+                if isinstance(raw_answer, list) and len(raw_answer) > 0:
+                    first_item = raw_answer[0]
+                    if isinstance(first_item, dict) and "text" in first_item:
+                        final_answer = first_item["text"]
+                    elif hasattr(first_item, "content"):
+                        final_answer = first_item.content
+                    else:
+                        final_answer = str(first_item)
+                elif isinstance(raw_answer, dict) and "text" in raw_answer:
+                    final_answer = raw_answer["text"]
+                else:
+                    final_answer = str(raw_answer)
+
                 st.markdown("### Final Answer")
-                st.markdown(f"<div class='card'>{result.get('answer', 'No answer generated.')}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='card'>\n\n{final_answer}\n\n</div>", unsafe_allow_html=True)
 
                 st.markdown("---")
                 col_a, col_b = st.columns(2)
                 with col_a:
                     st.subheader("Verdict")
-                    st.info(result.get("verdict", ""))
+                    st.info(verdict)
 
-                    st.subheader("Reason")
-                    st.write(result.get("reason", ""))
+                    if reason:
+                        st.subheader("Reason")
+                        st.write(reason)
 
                 with col_b:
-                    st.subheader("Web Query")
-                    st.code(result.get("web_query", ""))
+                    if web_query:
+                        st.subheader("Web Query")
+                        st.code(web_query)
 
-                    with st.expander("Refined Context"):
-                        st.text(result.get("refined_context", ""))
+                    if refined_context:
+                        with st.expander("Refined Context"):
+                            st.text(refined_context)
